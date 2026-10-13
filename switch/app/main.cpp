@@ -28,6 +28,9 @@
 #include <vector>
 
 #include "common/Horizon/Horizon.h"
+#include "common/Horizon/HorizonClock.h"
+#include "common/Horizon/HorizonFastmem.h"
+#include "common/Horizon/HorizonThreadTuning.h"
 
 #include "HorizonHost.h"
 #include "HorizonUsbStorage.h"
@@ -53,7 +56,12 @@ namespace
 	// Hold '+' and '-' together to open the FullscreenUI pause menu
 	constexpr u64 MENU_COMBO = HidNpadButton_Plus | HidNpadButton_Minus;
 
+	constexpr const char* HORIZON_SETTINGS_SECTION = "Horizon";
+
 	std::unique_ptr<INISettingsInterface> s_settings_interface;
+
+	// Shown once per VM run
+	bool s_memory_warning_shown = false;
 
 	struct ButtonMap
 	{
@@ -143,6 +151,8 @@ namespace
 		}
 	}
 
+	void EnsureClockDefaults();
+
 	void SetupSettings()
 	{
 		const std::string ini_path = Path::Combine(ARMSX2_ROOT, "armsx2.ini");
@@ -179,8 +189,81 @@ namespace
 			s_settings_interface->Save();
 		}
 
+		EnsureClockDefaults();
+
 		VMManager::Internal::LoadStartupSettings();
 		EmuFolders::EnsureFoldersExist();
+	}
+
+	// Clock control is opt-in (ClockMode=0). The keys are written once so they are easy to find.
+	void EnsureClockDefaults()
+	{
+		bool changed = false;
+
+		const auto ensure_int = [&changed](const char* key, int value) {
+			if (!s_settings_interface->ContainsValue(HORIZON_SETTINGS_SECTION, key))
+			{
+				s_settings_interface->SetIntValue(HORIZON_SETTINGS_SECTION, key, value);
+				changed = true;
+			}
+		};
+
+		ensure_int("ClockMode", 0); // 0 = off, 1 = set the clocks below while a game runs
+		ensure_int("CpuMHz", 1785); // 0 = leave untouched
+		ensure_int("GpuMHz", 0);
+		ensure_int("EmcMHz", 0);
+		if (!s_settings_interface->ContainsValue(HORIZON_SETTINGS_SECTION, "AllowOverStock"))
+		{
+			s_settings_interface->SetBoolValue(HORIZON_SETTINGS_SECTION, "AllowOverStock", false);
+			changed = true;
+		}
+
+		if (changed)
+			s_settings_interface->Save();
+	}
+
+	Horizon::Clock::Config LoadClockConfig()
+	{
+		auto lock = Host::GetSettingsLock();
+
+		const auto read_mhz = [](const char* key, int fallback) {
+			return static_cast<u32>(std::max(0, s_settings_interface->GetIntValue(HORIZON_SETTINGS_SECTION, key, fallback)));
+		};
+
+		Horizon::Clock::Config config;
+		config.enabled = s_settings_interface->GetIntValue(HORIZON_SETTINGS_SECTION, "ClockMode", 0) != 0;
+		config.cpu_mhz = read_mhz("CpuMHz", 1785);
+		config.gpu_mhz = read_mhz("GpuMHz", 0);
+		config.emc_mhz = read_mhz("EmcMHz", 0);
+		config.allow_over_stock = s_settings_interface->GetBoolValue(HORIZON_SETTINGS_SECTION, "AllowOverStock", false);
+		return config;
+	}
+
+	// Without the extra memory syscalls (applet mode) the arena and SMC write protection are
+	// unavailable and the recompiler falls back to slower paths. Say so, once per run.
+	void WarnAboutSlowMemoryPath()
+	{
+		if (s_memory_warning_shown)
+			return;
+		s_memory_warning_shown = true;
+
+		if (HorizonFastmem::IsSupported())
+			return;
+
+		WARNING_LOG("Fast memory and SMC write protection are unavailable: {}", HorizonFastmem::GetSupportReason());
+
+		if (appletGetAppletType() != AppletType_Application)
+		{
+			Host::AddKeyedOSDMessage("horizon_fast_memory",
+				"Applet mode: fast memory and SMC protection are unavailable, expect slower emulation. "
+				"Start the emulator through a game (title override) instead.",
+				15.0f);
+		}
+		else
+		{
+			Host::AddKeyedOSDMessage("horizon_fast_memory",
+				std::string("Fast memory is unavailable: ") + HorizonFastmem::GetSupportReason(), 15.0f);
+		}
 	}
 
 	bool SyncUsbGameRoots()
@@ -271,6 +354,9 @@ int main(int argc, char** argv)
 		EmuFolders::SetResourcesDirectory();
 	INFO_LOG("Resources directory: {}", EmuFolders::Resources);
 	SetupSettings();
+	// Helper threads honour the thread pinning setting from the very start, not only once the VM runs
+	Horizon::SetBackgroundThreadPolicyEnabled(
+		s_settings_interface->GetBoolValue("EmuCore", "EnableThreadPinning", true));
 	if (HorizonUsbStorage::Initialize())
 	{
 		SyncUsbGameRoots();
@@ -346,6 +432,7 @@ int main(int argc, char** argv)
 
 	std::atomic_bool stop_loop{false};
 	std::thread input_thread([&]() {
+		Horizon::MoveCurrentThreadOffEECore();
 		std::array<u64, NUM_LOCAL_PLAYERS> prev_held{};
 		bool prev_menu_combo = false;
 		while (!stop_loop.load(std::memory_order_relaxed))
@@ -402,14 +489,22 @@ int main(int argc, char** argv)
 		switch (VMManager::GetState())
 		{
 			case VMState::Running:
+				// Clocks are only raised while a game actually runs, not in menus or when paused
+				Horizon::Clock::Configure(LoadClockConfig());
+				Horizon::Clock::Acquire();
+				WarnAboutSlowMemoryPath();
 				VMManager::Execute(); // returns when paused or stopping
 				break;
 
 			case VMState::Stopping:
+				Horizon::Clock::Release();
 				VMManager::Shutdown(false);
 				break;
 
 			default:
+				Horizon::Clock::Release();
+				if (!VMManager::HasValidVM())
+					s_memory_warning_shown = false;
 				// Idle while the GS thread presents FullscreenUI
 				svcSleepThread(IDLE_POLL_NS);
 				break;
@@ -423,6 +518,8 @@ int main(int argc, char** argv)
 
 	if (VMManager::GetState() != VMState::Shutdown)
 		VMManager::Shutdown(false);
+
+	Horizon::Clock::Shutdown();
 
 	HorizonUsbStorage::Shutdown();
 

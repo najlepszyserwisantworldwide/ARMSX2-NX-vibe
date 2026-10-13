@@ -12,6 +12,7 @@
 
 #include "common/Console.h"
 #include "common/FileSystem.h"
+#include "common/Horizon/HorizonThreadTuning.h"
 #include "common/Path.h"
 #include "common/Timer.h"
 
@@ -324,6 +325,9 @@ namespace
 
 	void WorkerThread()
 	{
+		// Off the EE core only. Priority stays as is so shader builds do not starve behind GS.
+		Horizon::MoveCurrentThreadOffEECore();
+
 		std::unique_lock<std::mutex> guard(s_state.lock);
 		for (;;)
 		{

@@ -16,6 +16,7 @@
 #include "common/Console.h"
 #include "common/Error.h"
 #include "common/Horizon/Horizon.h"
+#include "common/Horizon/HorizonThreadTuning.h"
 
 #include <array>
 #include <atomic>
@@ -73,6 +74,10 @@ void HorizonAudioStream::FillBuffer(AudioOutBuffer& buf)
 
 void HorizonAudioStream::ThreadEntry()
 {
+	// Keep the mixer off the core the EE thread is pinned to. Priority is left alone: a late
+	// buffer is audible.
+	Horizon::MoveCurrentThreadOffEECore();
+
 	// Prime and queue all buffers before first completion.
 	for (AudioOutBuffer& buf : m_buffers)
 	{

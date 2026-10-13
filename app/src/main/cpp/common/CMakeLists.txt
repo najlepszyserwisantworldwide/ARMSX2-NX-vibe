@@ -164,9 +164,11 @@ elseif(APPLE)
 elseif(HORIZON)
 	target_sources(common PRIVATE
 		Horizon/HorizonBoost.cpp
+		Horizon/HorizonClock.cpp
 		Horizon/HorizonFastmem.cpp
 		Horizon/HorizonHostSys.cpp
 		Horizon/HorizonThreads.cpp
+		Horizon/HorizonThreadTuning.cpp
 		Horizon/HorizonMisc.cpp
 		Horizon/HorizonNet.cpp
 		Horizon/HorizonCompat.cpp

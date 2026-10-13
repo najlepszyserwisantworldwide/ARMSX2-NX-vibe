@@ -96,6 +96,7 @@
 
 #ifdef __SWITCH__
 #include "common/Horizon/Horizon.h"
+#include "common/Horizon/HorizonThreadTuning.h"
 #endif
 
 namespace VMManager
@@ -3953,6 +3954,12 @@ void VMManager::EnsureCPUInfoInitialized()
 
 void VMManager::SetEmuThreadAffinities()
 {
+#ifdef __SWITCH__
+	// Helper threads (audio, disc IO, loaders) follow the user's pinning choice. This is tied to
+	// the setting rather than to the VM state, because those threads start before the VM runs.
+	Horizon::SetBackgroundThreadPolicyEnabled(EmuConfig.EnableThreadPinning);
+#endif
+
 	const bool new_pin_enable = (GetState() != VMState::Shutdown && EmuConfig.EnableThreadPinning);
 	if (s_thread_affinities_set == new_pin_enable)
 		return;

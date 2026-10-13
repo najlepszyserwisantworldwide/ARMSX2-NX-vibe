@@ -11,6 +11,10 @@
 #include "common/SmallString.h"
 #include "common/Threading.h"
 
+#ifdef __SWITCH__
+#include "common/Horizon/HorizonThreadTuning.h"
+#endif
+
 #include <cstring>
 
 // Make sure buffer size is bigger than the cutoff where PCSX2 emulates a seek
@@ -56,6 +60,9 @@ size_t ThreadedFileReader::CopyBlocks(void* dst, const void* src, size_t size) c
 void ThreadedFileReader::Loop()
 {
 	Threading::SetNameOfCurrentThread("ISO Decompress");
+#ifdef __SWITCH__
+	Horizon::MoveCurrentThreadOffEECore();
+#endif
 
 	std::unique_lock<std::mutex> lock(m_mtx);
 

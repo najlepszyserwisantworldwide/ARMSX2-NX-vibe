@@ -4,6 +4,10 @@
 #include "CDVDdiscReader.h"
 #include "CDVD/CDVD.h"
 
+#ifdef __SWITCH__
+#include "common/Horizon/HorizonThreadTuning.h"
+#endif
+
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
@@ -165,6 +169,9 @@ static bool cdvdUpdateDiscStatus()
 
 static void cdvdThread()
 {
+#ifdef __SWITCH__
+	Horizon::MoveCurrentThreadOffEECore();
+#endif
 	u8 buffer[2352 * sectors_per_read];
 	u32 prefetches_left = 0;
 

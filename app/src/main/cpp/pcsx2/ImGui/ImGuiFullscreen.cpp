@@ -22,6 +22,10 @@
 #include "common/Threading.h"
 #include "common/Timer.h"
 
+#ifdef __SWITCH__
+#include "common/Horizon/HorizonThreadTuning.h"
+#endif
+
 #include "IconsFontAwesome5.h"
 #include "imgui_internal.h"
 #include "imgui_stdlib.h"
@@ -558,6 +562,10 @@ void ImGuiFullscreen::UploadAsyncTextures()
 void ImGuiFullscreen::TextureLoaderThread()
 {
 	Threading::SetNameOfCurrentThread("ImGuiFullscreen Texture Loader");
+#ifdef __SWITCH__
+	// Menu thumbnails are never urgent: off the EE core and a few steps lower priority
+	Horizon::MoveCurrentThreadOffEECore(4);
+#endif
 
 	std::unique_lock lock(s_texture_load_mutex);
 
